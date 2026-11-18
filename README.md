@@ -13,7 +13,7 @@ MCP server providing persistent SSH sessions for AI coding agents via the [Model
 > - **Quick connect**: `ssh_connect` accepts a hostname or IP directly, with optional `user` and `port` arguments
 > - **`host:port` targets**: `admin@10.0.1.50:1022` and bracketed IPv6 such as `admin@[2001:db8::1]:22`
 > - **Windows named pipe agent**: `SSH_AUTH_SOCK` can point to a Windows named pipe
-> - **Host key checking from `~/.ssh/config`**: `StrictHostKeyChecking` (`yes`/`ask`, `accept-new`, `no`/`off`) and `UserKnownHostsFile`
+> - **Host key checking from `~/.ssh/config`**: unknown hosts connect with a warning by default; changed keys are rejected with the command to fix it. Also supports `StrictHostKeyChecking` `yes`, `accept-new`, `no`/`off` and `UserKnownHostsFile`
 > - **Optional allowlist**: `--allowed-hosts` or `config.json` restricts connections. Without one, any host is allowed. It is a guardrail for the model, not a security boundary
 > - **Open-source release pipeline**: GoReleaser on tag push, without the paid GoReleaser Pro
 
@@ -286,13 +286,18 @@ If `--allowed-hosts` is not provided, falls back to `config.json` in the working
 
 ### Host key checking
 
-Host keys are verified the same way `ssh` verifies them, using options from `~/.ssh/config` for each alias:
+Host keys are checked using options from `~/.ssh/config` for each alias:
 
-| `StrictHostKeyChecking` | Behavior |
-| ----------------------- | -------- |
-| `yes` / `ask` (default) | Reject unknown hosts and changed keys. There is no terminal to prompt, so the error says how to proceed |
-| `accept-new`            | Record unknown hosts in the first `UserKnownHostsFile`; still reject changed keys |
-| `no` / `off`            | Accept any host key (what `ssh -o StrictHostKeyChecking=no` does) |
+| `StrictHostKeyChecking` | Unknown host | Changed key |
+| ----------------------- | ------------ | ----------- |
+| unset / `ask` (default) | Connect, and return a warning with the fingerprint. The model is expected to pass it on | Reject |
+| `yes`                   | Reject | Reject |
+| `accept-new`            | Record in the first `UserKnownHostsFile`, then connect | Reject |
+| `no` / `off`            | Connect without checking | Connect without checking |
+
+Unknown hosts are not written to known_hosts by default, so the warning repeats on each new connection until you add the key yourself, for example by connecting once with `ssh`.
+
+A changed key is always rejected, since it may be a man-in-the-middle attack. The error names the old entry (file and line) and the command to remove it, such as `ssh-keygen -R '10.0.1.50' -f ~/.ssh/known_hosts`. Run it only after confirming the machine was really replaced. Reused sessions do not repeat the warning.
 
 `UserKnownHostsFile` defaults to `~/.ssh/known_hosts` and accepts multiple space-separated paths. For test machines that share IPs, set the options per host:
 

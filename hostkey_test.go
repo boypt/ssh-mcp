@@ -29,9 +29,29 @@ func newTestPublicKey(t *testing.T) ssh.PublicKey {
 
 var testRemote = &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
 
-func TestBuildHostKeyCallbackStrictRejectsUnknownHost(t *testing.T) {
+func newCallback(hc HostConfig) (ssh.HostKeyCallback, error) {
+	return buildHostKeyCallback(hc, new([]string))
+}
+
+func TestBuildHostKeyCallbackDefaultWarnsOnUnknownHost(t *testing.T) {
 	hc := HostConfig{StrictHostKeyChecking: "ask", KnownHostsFiles: []string{filepath.Join(t.TempDir(), "known_hosts")}}
-	cb, err := buildHostKeyCallback(hc)
+	var warnings []string
+	cb, err := buildHostKeyCallback(hc, &warnings)
+	if err != nil {
+		t.Fatalf("buildHostKeyCallback: %v", err)
+	}
+
+	if err := cb("10.0.0.1:22", testRemote, newTestPublicKey(t)); err != nil {
+		t.Fatalf("expected unknown host to connect, got: %v", err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "not in known_hosts") || !strings.Contains(warnings[0], "SHA256:") {
+		t.Fatalf("expected one unknown host warning with fingerprint, got: %v", warnings)
+	}
+}
+
+func TestBuildHostKeyCallbackYesRejectsUnknownHost(t *testing.T) {
+	hc := HostConfig{StrictHostKeyChecking: "yes", KnownHostsFiles: []string{filepath.Join(t.TempDir(), "known_hosts")}}
+	cb, err := newCallback(hc)
 	if err != nil {
 		t.Fatalf("buildHostKeyCallback: %v", err)
 	}
@@ -39,6 +59,31 @@ func TestBuildHostKeyCallbackStrictRejectsUnknownHost(t *testing.T) {
 	err = cb("10.0.0.1:22", testRemote, newTestPublicKey(t))
 	if err == nil || !strings.Contains(err.Error(), "not in known_hosts") {
 		t.Fatalf("expected unknown host error, got: %v", err)
+	}
+}
+
+func TestChangedKeyErrorExplainsRemoval(t *testing.T) {
+	oldKey := newTestPublicKey(t)
+	newKey := newTestPublicKey(t)
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	line := knownhosts.Line([]string{"10.0.0.1"}, oldKey) + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatalf("write known_hosts: %v", err)
+	}
+
+	cb, err := newCallback(HostConfig{StrictHostKeyChecking: "ask", KnownHostsFiles: []string{path}})
+	if err != nil {
+		t.Fatalf("buildHostKeyCallback: %v", err)
+	}
+	err = cb("10.0.0.1:22", testRemote, newKey)
+	if err == nil {
+		t.Fatal("expected changed key to be rejected in default mode")
+	}
+	msg := err.Error()
+	for _, want := range []string{"has changed", "line 1", "ssh-keygen -R '10.0.0.1'", path} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("changed key error missing %q: %s", want, msg)
+		}
 	}
 }
 
@@ -50,7 +95,7 @@ func TestBuildHostKeyCallbackStrictAcceptsKnownKey(t *testing.T) {
 		t.Fatalf("write known_hosts: %v", err)
 	}
 
-	cb, err := buildHostKeyCallback(HostConfig{StrictHostKeyChecking: "yes", KnownHostsFiles: []string{path}})
+	cb, err := newCallback(HostConfig{StrictHostKeyChecking: "yes", KnownHostsFiles: []string{path}})
 	if err != nil {
 		t.Fatalf("buildHostKeyCallback: %v", err)
 	}
@@ -69,9 +114,9 @@ func TestBuildHostKeyCallbackRejectsChangedKey(t *testing.T) {
 	}
 
 	for _, mode := range []string{"yes", "accept-new"} {
-		cb, err := buildHostKeyCallback(HostConfig{StrictHostKeyChecking: mode, KnownHostsFiles: []string{path}})
+		cb, err := newCallback(HostConfig{StrictHostKeyChecking: mode, KnownHostsFiles: []string{path}})
 		if err != nil {
-			t.Fatalf("buildHostKeyCallback(%s): %v", mode, err)
+			t.Fatalf("newCallback(%s): %v", mode, err)
 		}
 		err = cb("10.0.0.1:22", testRemote, newKey)
 		if err == nil || !strings.Contains(err.Error(), "changed") {
@@ -85,7 +130,7 @@ func TestBuildHostKeyCallbackAcceptNewRecordsUnknownHost(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested")
 	path := filepath.Join(dir, "known_hosts")
 
-	cb, err := buildHostKeyCallback(HostConfig{StrictHostKeyChecking: "accept-new", KnownHostsFiles: []string{path}})
+	cb, err := newCallback(HostConfig{StrictHostKeyChecking: "accept-new", KnownHostsFiles: []string{path}})
 	if err != nil {
 		t.Fatalf("buildHostKeyCallback: %v", err)
 	}
@@ -101,7 +146,7 @@ func TestBuildHostKeyCallbackAcceptNewRecordsUnknownHost(t *testing.T) {
 		t.Fatalf("expected recorded entry for 10.0.0.2, got: %q", data)
 	}
 
-	cb, err = buildHostKeyCallback(HostConfig{StrictHostKeyChecking: "accept-new", KnownHostsFiles: []string{path}})
+	cb, err = newCallback(HostConfig{StrictHostKeyChecking: "accept-new", KnownHostsFiles: []string{path}})
 	if err != nil {
 		t.Fatalf("buildHostKeyCallback reload: %v", err)
 	}
@@ -112,9 +157,9 @@ func TestBuildHostKeyCallbackAcceptNewRecordsUnknownHost(t *testing.T) {
 
 func TestBuildHostKeyCallbackNoAcceptsAnyKey(t *testing.T) {
 	for _, mode := range []string{"no", "off"} {
-		cb, err := buildHostKeyCallback(HostConfig{StrictHostKeyChecking: mode})
+		cb, err := newCallback(HostConfig{StrictHostKeyChecking: mode})
 		if err != nil {
-			t.Fatalf("buildHostKeyCallback(%s): %v", mode, err)
+			t.Fatalf("newCallback(%s): %v", mode, err)
 		}
 		if err := cb("10.0.0.3:22", testRemote, newTestPublicKey(t)); err != nil {
 			t.Fatalf("mode %s: expected any key accepted, got: %v", mode, err)

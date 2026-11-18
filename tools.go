@@ -122,6 +122,8 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 			"without editing ~/.ssh/config. If a live session to the same user@host:port already " +
 			"exists, its session ID is returned without reconnecting. Optional width/height set the " +
 			"initial terminal size when a new connection is made; defaults are 200x50. " +
+			"If the host key is unknown, the connection still succeeds but the result includes a " +
+			"WARNING; tell the user, who should verify the fingerprint. A changed host key is rejected. " +
 			"The returned session ID is used by ssh_send_command, ssh_get_screen, " +
 			"ssh_resize, ssh_upload, ssh_download, and ssh_close_session. " +
 			"Note: subsequent ssh_send_command calls are non-blocking -- they do not " +
@@ -131,11 +133,15 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 		if args.Port != 0 {
 			opts.Port = strconv.Itoa(args.Port)
 		}
-		sessionID, err := mgr.ConnectWithOptions(opts)
+		sessionID, warnings, err := mgr.connect(opts)
 		if err != nil {
 			return errorResult("Failed to connect: %v", err), nil, nil
 		}
-		return textResult(fmt.Sprintf("Connected successfully. Session ID: %s", sessionID)), nil, nil
+		text := fmt.Sprintf("Connected successfully. Session ID: %s", sessionID)
+		for _, w := range warnings {
+			text += "\n\n" + w
+		}
+		return textResult(text), nil, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{

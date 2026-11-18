@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -16,17 +15,20 @@ import (
 // StrictHostKeyChecking and UserKnownHostsFile options from ~/.ssh/config:
 //
 //   - "no" / "off": accept any host key.
-//   - "accept-new": accept and record unknown hosts; reject changed keys.
-//   - anything else (default "ask"): reject unknown and changed keys. There is
-//     no terminal to prompt on, so the error explains how to proceed.
-func buildHostKeyCallback(hc HostConfig) (ssh.HostKeyCallback, error) {
+//   - "yes": reject unknown and changed keys.
+//   - "accept-new": record unknown hosts in known_hosts; reject changed keys.
+//   - default ("ask" or unset): connect to unknown hosts and append a warning
+//     to warnings so the caller can report it; reject changed keys.
+//
+// Changed keys are always rejected, since they may indicate a man-in-the-middle
+// attack. Removing the old entry is left to the user.
+func buildHostKeyCallback(hc HostConfig, warnings *[]string) (ssh.HostKeyCallback, error) {
 	switch hc.StrictHostKeyChecking {
 	case "no", "off":
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
-	acceptNew := hc.StrictHostKeyChecking == "accept-new"
-	paths := strings.Join(hc.KnownHostsFiles, ", ")
+	policy := hc.StrictHostKeyChecking
 
 	var existing []string
 	for _, path := range hc.KnownHostsFiles {
@@ -60,17 +62,49 @@ func buildHostKeyCallback(hc HostConfig) (ssh.HostKeyCallback, error) {
 		}
 
 		if len(keyErr.Want) > 0 {
-			return fmt.Errorf("host key for %s changed; possible man-in-the-middle, or the machine was replaced. "+
-				"Check %s, remove the old entry, or set StrictHostKeyChecking no for this host", hostname, paths)
+			return changedKeyError(hostname, key, keyErr)
 		}
 
-		if !acceptNew {
-			return fmt.Errorf("host key for %s is not in known_hosts (%s); connect once with ssh, "+
-				"or set StrictHostKeyChecking accept-new for this host", hostname, paths)
+		switch policy {
+		case "yes":
+			return fmt.Errorf("host key for %s is not in known_hosts (%s). Verify the fingerprint %s out of band, "+
+				"then connect once with ssh to add it",
+				knownhosts.Normalize(hostname), knownHostsDisplay(hc.KnownHostsFiles), ssh.FingerprintSHA256(key))
+		case "accept-new":
+			return appendKnownHost(hc.KnownHostsFiles, hostname, key)
+		default:
+			*warnings = append(*warnings, unknownHostWarning(hostname, key, hc.KnownHostsFiles))
+			return nil
 		}
-
-		return appendKnownHost(hc.KnownHostsFiles, hostname, key)
 	}, nil
+}
+
+// changedKeyError explains a host key mismatch and how the user can resolve it
+// after confirming the change is legitimate.
+func changedKeyError(hostname string, key ssh.PublicKey, keyErr *knownhosts.KeyError) error {
+	known := keyErr.Want[0]
+	host := knownhosts.Normalize(hostname)
+	return fmt.Errorf("host key for %s has changed. This may be a man-in-the-middle attack, or the machine was reinstalled.\n"+
+		"expected %s (%s line %d)\nreceived %s\n"+
+		"If the machine was really replaced, confirm the new fingerprint with its owner, then remove the old entry: "+
+		"ssh-keygen -R '%s' -f '%s'",
+		host, ssh.FingerprintSHA256(known.Key), known.Filename, known.Line, ssh.FingerprintSHA256(key), host, known.Filename)
+}
+
+// unknownHostWarning describes a connection made to a host missing from
+// known_hosts, without verifying its key.
+func unknownHostWarning(hostname string, key ssh.PublicKey, files []string) string {
+	return fmt.Sprintf("WARNING: host key for %s is not in known_hosts. Connected without verifying the host. "+
+		"Fingerprint %s. Confirm it out of band, then add it to %s (for example by connecting once with ssh and accepting it).",
+		knownhosts.Normalize(hostname), ssh.FingerprintSHA256(key), knownHostsDisplay(files))
+}
+
+// knownHostsDisplay names the known_hosts file used for new entries.
+func knownHostsDisplay(files []string) string {
+	if len(files) == 0 {
+		return "known_hosts"
+	}
+	return files[0]
 }
 
 // appendKnownHost records key for hostname in the first configured known_hosts

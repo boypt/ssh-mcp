@@ -221,9 +221,16 @@ func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, e
 // session to the same user@hostname:port already exists, its ID is returned
 // and no new connection is made; the requested size is ignored in that case.
 func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
+	id, _, err := m.connect(opts)
+	return id, err
+}
+
+// connect is ConnectWithOptions that also returns warnings about the host, such
+// as an unverified host key. Warnings are empty when an existing session is reused.
+func (m *SSHManager) connect(opts ConnectOptions) (string, []string, error) {
 	user, host, port, err := parseTarget(opts.Host)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if opts.User == "" {
 		opts.User = user
@@ -233,16 +240,16 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	}
 	opts.Host = host
 	if opts.Host == "" {
-		return "", fmt.Errorf("host is required")
+		return "", nil, fmt.Errorf("host is required")
 	}
 	if opts.Port != "" {
 		if n, err := strconv.Atoi(opts.Port); err != nil || n < 1 || n > 65535 {
-			return "", fmt.Errorf("invalid port %q", opts.Port)
+			return "", nil, fmt.Errorf("invalid port %q", opts.Port)
 		}
 	}
 
 	if !m.isAllowed(opts.Host) {
-		return "", fmt.Errorf("%w: %q", ErrHostNotAllowed, opts.Host)
+		return "", nil, fmt.Errorf("%w: %q", ErrHostNotAllowed, opts.Host)
 	}
 
 	hc := resolveHostConfig(opts.Host)
@@ -258,7 +265,7 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	defer unlock()
 
 	if id, ok := m.activeSessionFor(endpoint); ok {
-		return id, nil
+		return id, nil, nil
 	}
 
 	width, height := clampTermSize(opts.Width, opts.Height)
@@ -266,12 +273,13 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	authMethods := buildAuthMethods(hc)
 
 	if len(authMethods) == 0 {
-		return "", fmt.Errorf("%w for host %q", ErrNoAuthMethods, opts.Host)
+		return "", nil, fmt.Errorf("%w for host %q", ErrNoAuthMethods, opts.Host)
 	}
 
-	hostKeyCallback, err := buildHostKeyCallback(hc)
+	var warnings []string
+	hostKeyCallback, err := buildHostKeyCallback(hc, &warnings)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	config := &ssh.ClientConfig{
@@ -284,7 +292,7 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	addr := net.JoinHostPort(hc.Hostname, hc.Port)
 	conn, err := net.DialTimeout("tcp", addr, connectionTimeout)
 	if err != nil {
-		return "", fmt.Errorf("failed to connect: %w", err)
+		return "", nil, fmt.Errorf("failed to connect: %w", err)
 	}
 
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
@@ -295,7 +303,7 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
 	if err != nil {
 		conn.Close()
-		return "", fmt.Errorf("failed to establish SSH connection: %w", err)
+		return "", nil, fmt.Errorf("failed to establish SSH connection: %w", err)
 	}
 
 	client := ssh.NewClient(sshConn, chans, reqs)
@@ -303,33 +311,33 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		client.Close()
-		return "", fmt.Errorf("failed to create session: %w", err)
+		return "", nil, fmt.Errorf("failed to create session: %w", err)
 	}
 
 	if err := session.RequestPty(defaultTermType, height, width, ssh.TerminalModes{}); err != nil {
 		session.Close()
 		client.Close()
-		return "", fmt.Errorf("failed to request pty: %w", err)
+		return "", nil, fmt.Errorf("failed to request pty: %w", err)
 	}
 
 	stdout, err := session.StdoutPipe()
 	if err != nil {
 		session.Close()
 		client.Close()
-		return "", fmt.Errorf("failed to get stdout pipe: %w", err)
+		return "", nil, fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
 	stdin, err := session.StdinPipe()
 	if err != nil {
 		session.Close()
 		client.Close()
-		return "", fmt.Errorf("failed to get stdin pipe: %w", err)
+		return "", nil, fmt.Errorf("failed to get stdin pipe: %w", err)
 	}
 
 	if err := session.Shell(); err != nil {
 		session.Close()
 		client.Close()
-		return "", fmt.Errorf("failed to start shell: %w", err)
+		return "", nil, fmt.Errorf("failed to start shell: %w", err)
 	}
 
 	emulator := vt.NewSafeEmulator(width, height)
@@ -358,7 +366,7 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 	m.sessions[sessionID] = sshSession
 	m.mu.Unlock()
 
-	return sessionID, nil
+	return sessionID, warnings, nil
 }
 
 // pumpOutput reads from the session's stdout into the virtual terminal until
