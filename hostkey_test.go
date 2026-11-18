@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -160,7 +161,8 @@ func TestIsAllowedNilAllowlistIsUnrestricted(t *testing.T) {
 
 func TestConnectReusesActiveSession(t *testing.T) {
 	mgr := NewSSHManager(nil)
-	mgr.sessions["s1"] = &SSHSession{id: "s1", alias: "reuse-host-xyz", manager: mgr, active: true}
+	endpoint := resolveHostConfig("reuse-host-xyz").endpoint()
+	mgr.sessions["s1"] = &SSHSession{id: "s1", endpoint: endpoint, manager: mgr, active: true}
 
 	id, err := mgr.ConnectWithSize("reuse-host-xyz", 80, 24)
 	if err != nil {
@@ -171,5 +173,46 @@ func TestConnectReusesActiveSession(t *testing.T) {
 	}
 	if len(mgr.sessions) != 1 {
 		t.Fatalf("expected no new session, have %d", len(mgr.sessions))
+	}
+}
+
+func TestSplitUserHost(t *testing.T) {
+	tests := []struct{ in, user, host string }{
+		{"10.0.1.50", "", "10.0.1.50"},
+		{"admin@10.0.1.50", "admin", "10.0.1.50"},
+		{"web1", "", "web1"},
+		{"a@b@host", "a@b", "host"},
+	}
+	for _, tt := range tests {
+		user, host := splitUserHost(tt.in)
+		if user != tt.user || host != tt.host {
+			t.Fatalf("splitUserHost(%q) = (%q, %q), want (%q, %q)", tt.in, user, host, tt.user, tt.host)
+		}
+	}
+}
+
+func TestConnectRejectsInvalidPort(t *testing.T) {
+	mgr := NewSSHManager(nil)
+	for _, port := range []string{"0", "65536", "ssh"} {
+		_, err := mgr.ConnectWithOptions(ConnectOptions{Host: "10.0.0.7", Port: port})
+		if err == nil || !strings.Contains(err.Error(), "invalid port") {
+			t.Fatalf("port %q: expected invalid port error, got: %v", port, err)
+		}
+	}
+}
+
+func TestConnectAllowlistUsesHostWithoutUser(t *testing.T) {
+	mgr := NewSSHManager([]string{"10.0.0.9"})
+	_, err := mgr.ConnectWithOptions(ConnectOptions{Host: "bob@10.0.0.8"})
+	if !errors.Is(err, ErrHostNotAllowed) {
+		t.Fatalf("expected ErrHostNotAllowed for unlisted host, got: %v", err)
+	}
+}
+
+func TestEndpointDistinguishesUser(t *testing.T) {
+	a := HostConfig{User: "alice", Hostname: "10.0.0.5", Port: "22"}
+	b := HostConfig{User: "bob", Hostname: "10.0.0.5", Port: "22"}
+	if a.endpoint() == b.endpoint() {
+		t.Fatalf("expected different users to produce different endpoints")
 	}
 }

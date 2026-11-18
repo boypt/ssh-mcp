@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,7 @@ import (
 // goroutines.
 type SSHSession struct {
 	id       string
-	alias    string
+	endpoint string
 	manager  *SSHManager
 	client   *ssh.Client
 	session  *ssh.Session
@@ -79,10 +80,10 @@ func (s *SSHSession) writeStdin(p []byte) error {
 
 // SSHManager owns all live sessions and the allowed-host policy.
 type SSHManager struct {
-	sessions     map[string]*SSHSession
-	allowedHosts []string
-	aliasLocks   map[string]*sync.Mutex
-	mu           sync.RWMutex
+	sessions      map[string]*SSHSession
+	allowedHosts  []string
+	endpointLocks map[string]*sync.Mutex
+	mu            sync.RWMutex
 }
 
 // NewSSHManager returns a manager limited to the given allowlist. A nil
@@ -91,9 +92,9 @@ type SSHManager struct {
 // to its entries.
 func NewSSHManager(allowedHosts []string) *SSHManager {
 	return &SSHManager{
-		sessions:     make(map[string]*SSHSession),
-		allowedHosts: allowedHosts,
-		aliasLocks:   make(map[string]*sync.Mutex),
+		sessions:      make(map[string]*SSHSession),
+		allowedHosts:  allowedHosts,
+		endpointLocks: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -140,15 +141,15 @@ func (m *SSHManager) Connect(alias string) (string, error) {
 	return m.ConnectWithSize(alias, defaultTermWidth, defaultTermHeight)
 }
 
-// lockAlias serializes connection attempts for one alias so concurrent
+// lockEndpoint serializes connection attempts for one endpoint so concurrent
 // ssh_connect calls cannot each dial a separate session. The returned func
 // releases the lock.
-func (m *SSHManager) lockAlias(alias string) func() {
+func (m *SSHManager) lockEndpoint(endpoint string) func() {
 	m.mu.Lock()
-	lock, ok := m.aliasLocks[alias]
+	lock, ok := m.endpointLocks[endpoint]
 	if !ok {
 		lock = &sync.Mutex{}
-		m.aliasLocks[alias] = lock
+		m.endpointLocks[endpoint] = lock
 	}
 	m.mu.Unlock()
 
@@ -156,14 +157,14 @@ func (m *SSHManager) lockAlias(alias string) func() {
 	return lock.Unlock
 }
 
-// activeSessionFor returns the ID of a live session connected via alias, if
+// activeSessionFor returns the ID of a live session connected to endpoint, if
 // one exists.
-func (m *SSHManager) activeSessionFor(alias string) (string, bool) {
+func (m *SSHManager) activeSessionFor(endpoint string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for id, s := range m.sessions {
-		if s.alias == alias && s.isActive() {
+		if s.endpoint == endpoint && s.isActive() {
 			return id, true
 		}
 	}
@@ -197,32 +198,69 @@ func clampTermSize(w, h int) (int, int) {
 	return w, h
 }
 
+// ConnectOptions describes the SSH target for ConnectWithOptions. Host is an
+// alias from ~/.ssh/config or a hostname/IP, and may carry a "user@" prefix.
+// User and Port, when set, override ~/.ssh/config and the defaults.
+type ConnectOptions struct {
+	Host   string
+	User   string
+	Port   string
+	Width  int
+	Height int
+}
+
 // ConnectWithSize is like Connect but lets the caller pick the initial PTY
 // and emulator dimensions. Non-positive values fall back to the defaults,
 // and out-of-range values are clamped to [minTermWidth..maxTermWidth] x
 // [minTermHeight..maxTermHeight].
-//
-// If a live session to alias already exists, its ID is returned and no new
-// connection is made; the requested size is ignored in that case.
 func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, error) {
-	if !m.isAllowed(alias) {
-		return "", fmt.Errorf("%w: %q", ErrHostNotAllowed, alias)
+	return m.ConnectWithOptions(ConnectOptions{Host: alias, Width: width, Height: height})
+}
+
+// ConnectWithOptions connects to the target described by opts. If a live
+// session to the same user@hostname:port already exists, its ID is returned
+// and no new connection is made; the requested size is ignored in that case.
+func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
+	user, host := splitUserHost(opts.Host)
+	if opts.User == "" {
+		opts.User = user
+	}
+	opts.Host = host
+	if opts.Host == "" {
+		return "", fmt.Errorf("host is required")
+	}
+	if opts.Port != "" {
+		if n, err := strconv.Atoi(opts.Port); err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("invalid port %q", opts.Port)
+		}
 	}
 
-	unlock := m.lockAlias(alias)
+	if !m.isAllowed(opts.Host) {
+		return "", fmt.Errorf("%w: %q", ErrHostNotAllowed, opts.Host)
+	}
+
+	hc := resolveHostConfig(opts.Host)
+	if opts.User != "" {
+		hc.User = opts.User
+	}
+	if opts.Port != "" {
+		hc.Port = opts.Port
+	}
+
+	endpoint := hc.endpoint()
+	unlock := m.lockEndpoint(endpoint)
 	defer unlock()
 
-	if id, ok := m.activeSessionFor(alias); ok {
+	if id, ok := m.activeSessionFor(endpoint); ok {
 		return id, nil
 	}
 
-	width, height = clampTermSize(width, height)
+	width, height := clampTermSize(opts.Width, opts.Height)
 
-	hc := resolveHostConfig(alias)
 	authMethods := buildAuthMethods(hc)
 
 	if len(authMethods) == 0 {
-		return "", fmt.Errorf("%w for host %q", ErrNoAuthMethods, alias)
+		return "", fmt.Errorf("%w for host %q", ErrNoAuthMethods, opts.Host)
 	}
 
 	hostKeyCallback, err := buildHostKeyCallback(hc)
@@ -294,7 +332,7 @@ func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, e
 	ctx, cancel := context.WithCancel(context.Background())
 	sshSession := &SSHSession{
 		id:       sessionID,
-		alias:    alias,
+		endpoint: endpoint,
 		manager:  m,
 		client:   client,
 		session:  session,

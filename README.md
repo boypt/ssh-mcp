@@ -78,7 +78,7 @@ ssh-mcp --allowed-hosts="my-desktop"
 
 | Tool                | Description                                                       |
 | ------------------- | ----------------------------------------------------------------- |
-| `ssh_connect`       | Connect to a host by alias reusing a live session (optional `width`, `height`) |
+| `ssh_connect`       | Connect by alias or IP, optional `user`/`port`, reuses live sessions |
 | `ssh_exec`          | Run a command and **block** until it finishes or times out        |
 | `ssh_send_command`  | Send a command (non-blocking); for TUIs / fire-and-forget         |
 | `ssh_send_keys`     | Send raw bytes with no newline (Ctrl-C, Esc, arrows, TUI keys)    |
@@ -142,6 +142,18 @@ server keeps that consistent under concurrent tool calls:
 If you fire several commands at the same session simultaneously, expect all but
 one to come back with an "already executing" error rather than corrupting the
 shell. Sequence them, or use separate sessions.
+
+### Quick connect
+
+`ssh_connect` accepts a hostname or IP directly, without an entry in `~/.ssh/config`:
+
+```json
+{ "host": "10.0.1.50", "user": "admin", "port": 2222 }
+```
+
+`host` may also carry the user as `admin@10.0.1.50`. Precedence for each field is: the `user`/`port` arguments, then `~/.ssh/config`, then defaults (`$USER`, port 22). Sessions are reused per resolved `user@host:port`, so an alias and its IP share one session, while the same IP with a different user opens a new one.
+
+If an allowlist is configured, it is matched against the host part without the user (for example `10.0.1.50`), so list the IP there to allow direct connections.
 
 ### Terminal size
 

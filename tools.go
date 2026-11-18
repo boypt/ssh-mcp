@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,9 @@ const (
 )
 
 type connectArgs struct {
-	Host   string `json:"host" jsonschema:"SSH host alias (matches ~/.ssh/config Host entries)"`
+	Host   string `json:"host" jsonschema:"SSH host alias from ~/.ssh/config, or a hostname/IP. May include a user@ prefix, e.g. admin@10.0.1.50."`
+	User   string `json:"user,omitempty" jsonschema:"Optional login user. Overrides the User from ~/.ssh/config and any user@ prefix in host."`
+	Port   int    `json:"port,omitempty" jsonschema:"Optional SSH port. Overrides the Port from ~/.ssh/config. Defaults to 22."`
 	Width  int    `json:"width,omitempty" jsonschema:"Optional initial terminal width in columns. Defaults to 200 if omitted or non-positive. Clamped to [20, 500]."`
 	Height int    `json:"height,omitempty" jsonschema:"Optional initial terminal height in rows. Defaults to 50 if omitted or non-positive. Clamped to [5, 200]."`
 }
@@ -114,16 +117,21 @@ func errorResult(format string, args ...any) *mcp.CallToolResult {
 func registerTools(server *mcp.Server, mgr *SSHManager) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolConnect,
-		Description: "Connect to an SSH host by alias (resolved via ~/.ssh/config). " +
-			"If a live session to that alias already exists, its session ID is returned without " +
-			"reconnecting. Optional width/height set the initial terminal size when a new connection " +
-			"is made; defaults are 200x50. " +
+		Description: "Connect to an SSH host by alias (resolved via ~/.ssh/config) or directly by " +
+			"hostname/IP, like the ssh command. Use user and port to set the login user and port " +
+			"without editing ~/.ssh/config. If a live session to the same user@host:port already " +
+			"exists, its session ID is returned without reconnecting. Optional width/height set the " +
+			"initial terminal size when a new connection is made; defaults are 200x50. " +
 			"The returned session ID is used by ssh_send_command, ssh_get_screen, " +
 			"ssh_resize, ssh_upload, ssh_download, and ssh_close_session. " +
 			"Note: subsequent ssh_send_command calls are non-blocking -- they do not " +
 			"wait for the remote command to finish. See ssh_send_command for details.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args connectArgs) (*mcp.CallToolResult, any, error) {
-		sessionID, err := mgr.ConnectWithSize(args.Host, args.Width, args.Height)
+		opts := ConnectOptions{Host: args.Host, User: args.User, Width: args.Width, Height: args.Height}
+		if args.Port != 0 {
+			opts.Port = strconv.Itoa(args.Port)
+		}
+		sessionID, err := mgr.ConnectWithOptions(opts)
 		if err != nil {
 			return errorResult("Failed to connect: %v", err), nil, nil
 		}

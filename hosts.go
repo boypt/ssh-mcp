@@ -48,6 +48,21 @@ func resolveHostConfig(alias string) HostConfig {
 	return hc
 }
 
+// endpoint identifies the resolved connection target. Sessions are reused per
+// endpoint, so the same machine reached by alias or by IP shares one session.
+func (hc HostConfig) endpoint() string {
+	return hc.User + "@" + hc.Hostname + ":" + hc.Port
+}
+
+// splitUserHost splits an optional "user@" prefix off a connection target. The
+// user is empty when no "@" is present.
+func splitUserHost(target string) (user, host string) {
+	if i := strings.LastIndex(target, "@"); i >= 0 {
+		return target[:i], target[i+1:]
+	}
+	return "", target
+}
+
 // expandHome replaces a leading "~/" with the user's home directory.
 func expandHome(path string) string {
 	if !strings.HasPrefix(path, "~/") {
