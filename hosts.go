@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,13 +56,29 @@ func (hc HostConfig) endpoint() string {
 	return hc.User + "@" + hc.Hostname + ":" + hc.Port
 }
 
-// splitUserHost splits an optional "user@" prefix off a connection target. The
-// user is empty when no "@" is present.
-func splitUserHost(target string) (user, host string) {
+// parseTarget splits a connection target of the form [user@]host[:port] into
+// its parts. IPv6 literals are bracketed when a port is given ([fe80::1]:22);
+// a bare IPv6 address without a port is returned as the host. Empty user or
+// port means none was given.
+func parseTarget(target string) (user, host, port string, err error) {
 	if i := strings.LastIndex(target, "@"); i >= 0 {
-		return target[:i], target[i+1:]
+		user, target = target[:i], target[i+1:]
 	}
-	return "", target
+
+	if strings.HasPrefix(target, "[") && strings.HasSuffix(target, "]") {
+		return user, target[1 : len(target)-1], "", nil
+	}
+	if strings.Count(target, ":") == 1 || strings.HasPrefix(target, "[") {
+		host, port, err = net.SplitHostPort(target)
+		if err != nil {
+			return "", "", "", fmt.Errorf("invalid host %q: %w", target, err)
+		}
+		if port == "" {
+			return "", "", "", fmt.Errorf("missing port in %q", target)
+		}
+		return user, host, port, nil
+	}
+	return user, target, "", nil
 }
 
 // expandHome replaces a leading "~/" with the user's home directory.

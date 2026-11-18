@@ -176,27 +176,50 @@ func TestConnectReusesActiveSession(t *testing.T) {
 	}
 }
 
-func TestSplitUserHost(t *testing.T) {
-	tests := []struct{ in, user, host string }{
-		{"10.0.1.50", "", "10.0.1.50"},
-		{"admin@10.0.1.50", "admin", "10.0.1.50"},
-		{"web1", "", "web1"},
-		{"a@b@host", "a@b", "host"},
+func TestParseTarget(t *testing.T) {
+	tests := []struct{ in, user, host, port string }{
+		{"10.0.1.50", "", "10.0.1.50", ""},
+		{"web1", "", "web1", ""},
+		{"admin@10.0.1.50", "admin", "10.0.1.50", ""},
+		{"10.0.1.50:1022", "", "10.0.1.50", "1022"},
+		{"admin@10.0.1.50:1022", "admin", "10.0.1.50", "1022"},
+		{"a@b@host", "a@b", "host", ""},
+		{"fe80::1", "", "fe80::1", ""},
+		{"[fe80::1]", "", "fe80::1", ""},
+		{"[fe80::1]:2222", "", "fe80::1", "2222"},
+		{"admin@[2001:db8::1]:22", "admin", "2001:db8::1", "22"},
 	}
 	for _, tt := range tests {
-		user, host := splitUserHost(tt.in)
-		if user != tt.user || host != tt.host {
-			t.Fatalf("splitUserHost(%q) = (%q, %q), want (%q, %q)", tt.in, user, host, tt.user, tt.host)
+		user, host, port, err := parseTarget(tt.in)
+		if err != nil {
+			t.Fatalf("parseTarget(%q): unexpected error: %v", tt.in, err)
+		}
+		if user != tt.user || host != tt.host || port != tt.port {
+			t.Fatalf("parseTarget(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				tt.in, user, host, port, tt.user, tt.host, tt.port)
+		}
+	}
+}
+
+func TestParseTargetRejectsMalformed(t *testing.T) {
+	for _, in := range []string{"host:", "[fe80::1", "[fe80::1]:"} {
+		if _, _, _, err := parseTarget(in); err == nil {
+			t.Fatalf("parseTarget(%q): expected error", in)
 		}
 	}
 }
 
 func TestConnectRejectsInvalidPort(t *testing.T) {
 	mgr := NewSSHManager(nil)
-	for _, port := range []string{"0", "65536", "ssh"} {
-		_, err := mgr.ConnectWithOptions(ConnectOptions{Host: "10.0.0.7", Port: port})
+	for _, opts := range []ConnectOptions{
+		{Host: "10.0.0.7", Port: "0"},
+		{Host: "10.0.0.7", Port: "65536"},
+		{Host: "10.0.0.7", Port: "ssh"},
+		{Host: "10.0.0.7:99999"},
+	} {
+		_, err := mgr.ConnectWithOptions(opts)
 		if err == nil || !strings.Contains(err.Error(), "invalid port") {
-			t.Fatalf("port %q: expected invalid port error, got: %v", port, err)
+			t.Fatalf("%+v: expected invalid port error, got: %v", opts, err)
 		}
 	}
 }

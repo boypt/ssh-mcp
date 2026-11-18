@@ -30,9 +30,9 @@ const (
 )
 
 type connectArgs struct {
-	Host   string `json:"host" jsonschema:"SSH host alias from ~/.ssh/config, or a hostname/IP. May include a user@ prefix, e.g. admin@10.0.1.50."`
+	Host   string `json:"host" jsonschema:"SSH host alias from ~/.ssh/config, or a hostname/IP. May be written as [user@]host[:port], e.g. admin@10.0.1.50:1022 or admin@[2001:db8::1]:22. IPv6 with a port must be bracketed."`
 	User   string `json:"user,omitempty" jsonschema:"Optional login user. Overrides the User from ~/.ssh/config and any user@ prefix in host."`
-	Port   int    `json:"port,omitempty" jsonschema:"Optional SSH port. Overrides the Port from ~/.ssh/config. Defaults to 22."`
+	Port   int    `json:"port,omitempty" jsonschema:"Optional SSH port. Overrides the port given in host and the Port from ~/.ssh/config. Defaults to 22."`
 	Width  int    `json:"width,omitempty" jsonschema:"Optional initial terminal width in columns. Defaults to 200 if omitted or non-positive. Clamped to [20, 500]."`
 	Height int    `json:"height,omitempty" jsonschema:"Optional initial terminal height in rows. Defaults to 50 if omitted or non-positive. Clamped to [5, 200]."`
 }

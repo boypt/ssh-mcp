@@ -151,7 +151,7 @@ shell. Sequence them, or use separate sessions.
 { "host": "10.0.1.50", "user": "admin", "port": 2222 }
 ```
 
-`host` may also carry the user as `admin@10.0.1.50`. Precedence for each field is: the `user`/`port` arguments, then `~/.ssh/config`, then defaults (`$USER`, port 22). Sessions are reused per resolved `user@host:port`, so an alias and its IP share one session, while the same IP with a different user opens a new one.
+`host` may also carry the user and port in the usual `[user@]host[:port]` form, such as `admin@10.0.1.50:1022` or `admin@[2001:db8::1]:22`. IPv6 literals with a port must be bracketed, as in `ssh`. Precedence for each field is: the `user`/`port` arguments, then the values in `host`, then `~/.ssh/config`, then defaults (`$USER`, port 22). Sessions are reused per resolved `user@host:port`, so an alias and its IP share one session, while the same IP with a different user opens a new one.
 
 If an allowlist is configured, it is matched against the host part without the user (for example `10.0.1.50`), so list the IP there to allow direct connections.
 

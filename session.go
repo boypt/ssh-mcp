@@ -221,9 +221,15 @@ func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, e
 // session to the same user@hostname:port already exists, its ID is returned
 // and no new connection is made; the requested size is ignored in that case.
 func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
-	user, host := splitUserHost(opts.Host)
+	user, host, port, err := parseTarget(opts.Host)
+	if err != nil {
+		return "", err
+	}
 	if opts.User == "" {
 		opts.User = user
+	}
+	if opts.Port == "" {
+		opts.Port = port
 	}
 	opts.Host = host
 	if opts.Host == "" {
