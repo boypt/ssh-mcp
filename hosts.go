@@ -11,11 +11,13 @@ import (
 
 // HostConfig holds resolved SSH connection details for a host alias.
 type HostConfig struct {
-	Hostname string
-	Port     string
-	User     string
-	KeyPath  string
-	Password string
+	Hostname              string
+	Port                  string
+	User                  string
+	KeyPath               string
+	Password              string
+	StrictHostKeyChecking string
+	KnownHostsFiles       []string
 }
 
 // resolveHostConfig looks up an alias in ~/.ssh/config and applies sane
@@ -23,10 +25,12 @@ type HostConfig struct {
 // tilde-prefixed paths work without manual handling.
 func resolveHostConfig(alias string) HostConfig {
 	hc := HostConfig{
-		Hostname: sshconfig.Get(alias, "HostName"),
-		Port:     sshconfig.Get(alias, "Port"),
-		User:     sshconfig.Get(alias, "User"),
-		KeyPath:  sshconfig.Get(alias, "IdentityFile"),
+		Hostname:              sshconfig.Get(alias, "HostName"),
+		Port:                  sshconfig.Get(alias, "Port"),
+		User:                  sshconfig.Get(alias, "User"),
+		KeyPath:               sshconfig.Get(alias, "IdentityFile"),
+		StrictHostKeyChecking: strings.ToLower(sshconfig.Get(alias, "StrictHostKeyChecking")),
+		KnownHostsFiles:       expandKnownHostsFiles(sshconfig.Get(alias, "UserKnownHostsFile")),
 	}
 
 	if hc.Hostname == "" {
@@ -39,13 +43,34 @@ func resolveHostConfig(alias string) HostConfig {
 		hc.User = os.Getenv("USER")
 	}
 
-	if strings.HasPrefix(hc.KeyPath, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			hc.KeyPath = filepath.Join(home, hc.KeyPath[2:])
-		}
-	}
+	hc.KeyPath = expandHome(hc.KeyPath)
 
 	return hc
+}
+
+// expandHome replaces a leading "~/" with the user's home directory.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[2:])
+}
+
+// expandKnownHostsFiles splits a UserKnownHostsFile value into paths, expanding
+// "~/" and dropping the "none" sentinel, as OpenSSH does.
+func expandKnownHostsFiles(value string) []string {
+	var files []string
+	for _, field := range strings.Fields(value) {
+		if field == "none" {
+			continue
+		}
+		files = append(files, expandHome(field))
+	}
+	return files
 }
 
 // loadAllowedHosts reads the "hosts" key from the active jety configuration

@@ -29,7 +29,7 @@ const (
 )
 
 type connectArgs struct {
-	Host   string `json:"host" jsonschema:"SSH host alias from allowed hosts list (matches ~/.ssh/config Host entries)"`
+	Host   string `json:"host" jsonschema:"SSH host alias (matches ~/.ssh/config Host entries)"`
 	Width  int    `json:"width,omitempty" jsonschema:"Optional initial terminal width in columns. Defaults to 200 if omitted or non-positive. Clamped to [20, 500]."`
 	Height int    `json:"height,omitempty" jsonschema:"Optional initial terminal height in rows. Defaults to 50 if omitted or non-positive. Clamped to [5, 200]."`
 }
@@ -114,8 +114,10 @@ func errorResult(format string, args ...any) *mcp.CallToolResult {
 func registerTools(server *mcp.Server, mgr *SSHManager) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolConnect,
-		Description: "Connect to an allowed SSH host by alias (resolved via ~/.ssh/config). " +
-			"Optional width/height set the initial terminal size; defaults are 200x50. " +
+		Description: "Connect to an SSH host by alias (resolved via ~/.ssh/config). " +
+			"If a live session to that alias already exists, its session ID is returned without " +
+			"reconnecting. Optional width/height set the initial terminal size when a new connection " +
+			"is made; defaults are 200x50. " +
 			"The returned session ID is used by ssh_send_command, ssh_get_screen, " +
 			"ssh_resize, ssh_upload, ssh_download, and ssh_close_session. " +
 			"Note: subsequent ssh_send_command calls are non-blocking -- they do not " +
@@ -274,9 +276,13 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        toolListHosts,
-		Description: "List all allowed SSH hosts with resolved connection details",
+		Name: toolListHosts,
+		Description: "List allowed SSH hosts with resolved connection details. " +
+			"When no allowlist is configured, any alias from ~/.ssh/config can be connected.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		if !mgr.hasAllowlist() {
+			return textResult("No allowlist configured: any host alias from ~/.ssh/config can be connected."), nil, nil
+		}
 		hosts := mgr.ListHosts()
 		if len(hosts) == 0 {
 			return textResult("No configured hosts"), nil, nil

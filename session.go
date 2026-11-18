@@ -19,6 +19,7 @@ import (
 // goroutines.
 type SSHSession struct {
 	id       string
+	alias    string
 	manager  *SSHManager
 	client   *ssh.Client
 	session  *ssh.Session
@@ -80,15 +81,19 @@ func (s *SSHSession) writeStdin(p []byte) error {
 type SSHManager struct {
 	sessions     map[string]*SSHSession
 	allowedHosts []string
+	aliasLocks   map[string]*sync.Mutex
 	mu           sync.RWMutex
 }
 
-// NewSSHManager returns a manager limited to the given allowlist. An empty
-// allowlist means no hosts can be connected to.
+// NewSSHManager returns a manager limited to the given allowlist. A nil
+// allowlist means no restriction: any alias resolvable from ~/.ssh/config can
+// be connected. A non-nil slice, including an empty one, restricts connections
+// to its entries.
 func NewSSHManager(allowedHosts []string) *SSHManager {
 	return &SSHManager{
 		sessions:     make(map[string]*SSHSession),
 		allowedHosts: allowedHosts,
+		aliasLocks:   make(map[string]*sync.Mutex),
 	}
 }
 
@@ -118,9 +123,14 @@ func (s *SSHSession) isActive() bool {
 	return s.active
 }
 
-// isAllowed reports whether the alias is in the manager's allowlist.
+// isAllowed reports whether the alias may be connected to.
 func (m *SSHManager) isAllowed(alias string) bool {
-	return slices.Contains(m.allowedHosts, alias)
+	return m.allowedHosts == nil || slices.Contains(m.allowedHosts, alias)
+}
+
+// hasAllowlist reports whether connections are restricted to an explicit list.
+func (m *SSHManager) hasAllowlist() bool {
+	return m.allowedHosts != nil
 }
 
 // Connect dials the SSH host identified by alias and starts an interactive
@@ -128,6 +138,36 @@ func (m *SSHManager) isAllowed(alias string) bool {
 // used with the other manager methods.
 func (m *SSHManager) Connect(alias string) (string, error) {
 	return m.ConnectWithSize(alias, defaultTermWidth, defaultTermHeight)
+}
+
+// lockAlias serializes connection attempts for one alias so concurrent
+// ssh_connect calls cannot each dial a separate session. The returned func
+// releases the lock.
+func (m *SSHManager) lockAlias(alias string) func() {
+	m.mu.Lock()
+	lock, ok := m.aliasLocks[alias]
+	if !ok {
+		lock = &sync.Mutex{}
+		m.aliasLocks[alias] = lock
+	}
+	m.mu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
+// activeSessionFor returns the ID of a live session connected via alias, if
+// one exists.
+func (m *SSHManager) activeSessionFor(alias string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for id, s := range m.sessions {
+		if s.alias == alias && s.isActive() {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 // clampTermSize clamps a requested terminal size to the configured min/max
@@ -161,9 +201,19 @@ func clampTermSize(w, h int) (int, int) {
 // and emulator dimensions. Non-positive values fall back to the defaults,
 // and out-of-range values are clamped to [minTermWidth..maxTermWidth] x
 // [minTermHeight..maxTermHeight].
+//
+// If a live session to alias already exists, its ID is returned and no new
+// connection is made; the requested size is ignored in that case.
 func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, error) {
 	if !m.isAllowed(alias) {
 		return "", fmt.Errorf("%w: %q", ErrHostNotAllowed, alias)
+	}
+
+	unlock := m.lockAlias(alias)
+	defer unlock()
+
+	if id, ok := m.activeSessionFor(alias); ok {
+		return id, nil
 	}
 
 	width, height = clampTermSize(width, height)
@@ -175,10 +225,15 @@ func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, e
 		return "", fmt.Errorf("%w for host %q", ErrNoAuthMethods, alias)
 	}
 
+	hostKeyCallback, err := buildHostKeyCallback(hc)
+	if err != nil {
+		return "", err
+	}
+
 	config := &ssh.ClientConfig{
 		User:            hc.User,
 		Auth:            authMethods,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         connectionTimeout,
 	}
 
@@ -239,6 +294,7 @@ func (m *SSHManager) ConnectWithSize(alias string, width, height int) (string, e
 	ctx, cancel := context.WithCancel(context.Background())
 	sshSession := &SSHSession{
 		id:       sessionID,
+		alias:    alias,
 		manager:  m,
 		client:   client,
 		session:  session,
