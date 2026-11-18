@@ -7,16 +7,20 @@
 
 MCP server providing persistent SSH sessions for AI coding agents via the [Model Context Protocol](https://modelcontextprotocol.io).
 
+> **About this fork:** this version is maintained for personal use on Windows 11. Its goal is to replace the command-line `ssh` client for agents, not to act as a security boundary. The OpenSSH client on Windows has no session reuse, so every connection re-authenticates. This fork reuses a live session per host alias within the agent's run, and otherwise follows `~/.ssh/config` (including `StrictHostKeyChecking` and `UserKnownHostsFile`) so commands behave like `ssh`.
+>
+> The host allowlist is an optional guardrail for the model. It does not stop an agent that has its own shell from running `ssh` directly.
+
 ## The Problem
 
 AI coding agents can't interact with remote machines. You need to manually SSH in, run commands, and paste output back. For fleet management, server debugging, or remote development, this kills the feedback loop.
 
 ## The Solution
 
-**ssh-mcp** gives your AI agent direct SSH access to an allowed set of hosts. It resolves connections from `~/.ssh/config`, authenticates via ssh-agent/gpg-agent, and exposes a virtual terminal so the agent sees exactly what you'd see.
+**ssh-mcp** gives your AI agent direct SSH access to hosts defined in `~/.ssh/config`. It authenticates via ssh-agent/gpg-agent, keeps sessions alive for reuse within the agent's run, and exposes a virtual terminal so the agent sees exactly what you'd see.
 
 ```bash
-# Start with allowed hosts
+# Optionally restrict to specific hosts
 ssh-mcp --allowed-hosts="web1,db1,staging"
 ```
 
@@ -26,7 +30,9 @@ ssh-mcp --allowed-hosts="web1,db1,staging"
 - **Agent forwarding** — Authenticates via `ssh-agent` or `gpg-agent` (SSH_AUTH_SOCK)
 - **Virtual terminal** — Full PTY emulation with ANSI rendering via [charmbracelet/x/vt](https://github.com/charmbracelet/x)
 - **File transfer** — Bidirectional file and directory transfers via SFTP (recursive)
-- **Allowlist-only access** — Only explicitly permitted hosts can be connected to
+- **Optional allowlist** — `--allowed-hosts` / `config.json` restricts connections to listed aliases. Without one, any alias from `~/.ssh/config` can be connected. This is a guardrail for the model, not a security boundary: an agent with its own shell can still run `ssh` directly
+- **Host key checking** — Follows `StrictHostKeyChecking` and `UserKnownHostsFile` from `~/.ssh/config`, same as `ssh`
+- **Session reuse** — `ssh_connect` to an alias with a live session returns that session instead of re-authenticating
 - **Session management** — Multiple concurrent sessions with independent state
 - **Zero config** — Works out of the box if your `~/.ssh/config` is set up
 
@@ -72,7 +78,7 @@ ssh-mcp --allowed-hosts="my-desktop"
 
 | Tool                | Description                                                       |
 | ------------------- | ----------------------------------------------------------------- |
-| `ssh_connect`       | Connect to an allowed host by alias (optional `width`, `height`)  |
+| `ssh_connect`       | Connect to a host by alias reusing a live session (optional `width`, `height`) |
 | `ssh_exec`          | Run a command and **block** until it finishes or times out        |
 | `ssh_send_command`  | Send a command (non-blocking); for TUIs / fire-and-forget         |
 | `ssh_send_keys`     | Send raw bytes with no newline (Ctrl-C, Esc, arrows, TUI keys)    |
@@ -258,7 +264,26 @@ Restart Claude Desktop after editing the config.
 | ----------------- | ------------------------------------------------ |
 | `--allowed-hosts` | Comma-separated list of allowed SSH host aliases |
 
-If `--allowed-hosts` is not provided, falls back to `config.json` in the working directory.
+If `--allowed-hosts` is not provided, falls back to `config.json` in the working directory. If neither is set, there is no allowlist. An empty list (`"hosts": []`) allows nothing.
+
+### Host key checking
+
+Host keys are verified the same way `ssh` verifies them, using options from `~/.ssh/config` for each alias:
+
+| `StrictHostKeyChecking` | Behavior |
+| ----------------------- | -------- |
+| `yes` / `ask` (default) | Reject unknown hosts and changed keys. There is no terminal to prompt, so the error says how to proceed |
+| `accept-new`            | Record unknown hosts in the first `UserKnownHostsFile`; still reject changed keys |
+| `no` / `off`            | Accept any host key (what `ssh -o StrictHostKeyChecking=no` does) |
+
+`UserKnownHostsFile` defaults to `~/.ssh/known_hosts` and accepts multiple space-separated paths. For test machines that share IPs, set the options per host:
+
+```
+Host test-*
+    HostName 10.0.1.50
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+```
 
 ## How It Works
 
