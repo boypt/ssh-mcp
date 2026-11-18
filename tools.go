@@ -30,11 +30,11 @@ const (
 )
 
 type connectArgs struct {
-	Host   string `json:"host" jsonschema:"SSH host alias from ~/.ssh/config, or a hostname/IP. May be written as [user@]host[:port], e.g. admin@10.0.1.50:1022 or admin@[2001:db8::1]:22. IPv6 with a port must be bracketed."`
-	User   string `json:"user,omitempty" jsonschema:"Optional login user. Overrides the User from ~/.ssh/config and any user@ prefix in host."`
-	Port   int    `json:"port,omitempty" jsonschema:"Optional SSH port. Overrides the port given in host and the Port from ~/.ssh/config. Defaults to 22."`
-	Width  int    `json:"width,omitempty" jsonschema:"Optional initial terminal width in columns. Defaults to 200 if omitted or non-positive. Clamped to [20, 500]."`
-	Height int    `json:"height,omitempty" jsonschema:"Optional initial terminal height in rows. Defaults to 50 if omitted or non-positive. Clamped to [5, 200]."`
+	Host   string `json:"host" jsonschema:"Alias, hostname, or IP. May be [user@]host[:port]; bracket IPv6 when giving a port."`
+	User   string `json:"user,omitempty" jsonschema:"Login user. Overrides host's user and ~/.ssh/config."`
+	Port   int    `json:"port,omitempty" jsonschema:"SSH port. Overrides host's port and ~/.ssh/config. Default 22."`
+	Width  int    `json:"width,omitempty" jsonschema:"Initial terminal columns. Default 200."`
+	Height int    `json:"height,omitempty" jsonschema:"Initial terminal rows. Default 50."`
 }
 
 type sessionArgs struct {
@@ -43,7 +43,7 @@ type sessionArgs struct {
 
 type commandArgs struct {
 	SessionID string `json:"session_id" jsonschema:"SSH session ID"`
-	Command   string `json:"command" jsonschema:"Command to send. A literal newline is appended so the remote shell executes it. Note that this call is NON-BLOCKING: it returns the screen after only a short settle delay (a few seconds), regardless of whether the command has finished. Long-running commands (e.g. 'sleep 60', 'make build', training jobs) keep running on the remote host after the call returns; do NOT chain a local-style 'sleep N;' before the command expecting it to block here. Instead wait externally (your own sleep/timer outside this MCP) and then call ssh_get_screen to read fresh output."`
+	Command   string `json:"command" jsonschema:"Command line to send. A newline is appended. Non-blocking; see the tool description."`
 }
 
 type execArgs struct {
@@ -117,17 +117,10 @@ func errorResult(format string, args ...any) *mcp.CallToolResult {
 func registerTools(server *mcp.Server, mgr *SSHManager) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolConnect,
-		Description: "Connect to an SSH host by alias (resolved via ~/.ssh/config) or directly by " +
-			"hostname/IP, like the ssh command. Use user and port to set the login user and port " +
-			"without editing ~/.ssh/config. If a live session to the same user@host:port already " +
-			"exists, its session ID is returned without reconnecting. Optional width/height set the " +
-			"initial terminal size when a new connection is made; defaults are 200x50. " +
-			"If the host key is unknown, the connection still succeeds but the result includes a " +
-			"WARNING; tell the user, who should verify the fingerprint. A changed host key is rejected. " +
-			"The returned session ID is used by ssh_send_command, ssh_get_screen, " +
-			"ssh_resize, ssh_upload, ssh_download, and ssh_close_session. " +
-			"Note: subsequent ssh_send_command calls are non-blocking -- they do not " +
-			"wait for the remote command to finish. See ssh_send_command for details.",
+		Description: "Connect to an SSH host by alias from ~/.ssh/config, or directly by hostname/IP. " +
+			"Reuses a live session to the same user@host:port. " +
+			"If the host key is unknown, the result includes a WARNING to relay to the user; " +
+			"a changed key is rejected.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args connectArgs) (*mcp.CallToolResult, any, error) {
 		opts := ConnectOptions{Host: args.Host, User: args.User, Width: args.Width, Height: args.Height}
 		if args.Port != 0 {
@@ -146,21 +139,12 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolExec,
-		Description: "Run a single shell command and BLOCK until it finishes or the timeout elapses. " +
-			"This is the tool you want for almost everything: builds, git, package installs, queries, " +
-			"scripts, `cat`-ing a file, checking status -- anything that is supposed to finish. " +
-			"It runs in the SAME persistent shell as ssh_send_command, so working directory and " +
-			"environment set by earlier commands carry over. " +
-			"On success it returns the command's clean output (ANSI stripped, prompt and echo removed) " +
-			"and its exit code. " +
-			"If the command does not finish within timeout_ms (default 60s), the call returns with " +
-			"`completed=false` and a snapshot of the screen so you can see what it is stuck on (a " +
-			"prompt? a long build? an interactive pager?). The command is NOT killed -- it keeps " +
-			"running in the shell. You can then: call ssh_exec again (e.g. `true`) or ssh_get_screen " +
-			"to poll, send Ctrl-C with ssh_send_keys to interrupt it, or just wait. " +
-			"Do NOT use ssh_exec to launch interactive full-screen programs (vim, less, htop, top, " +
-			"mysql REPL) -- they never 'finish' so they will always time out; use ssh_send_command + " +
-			"ssh_send_keys for those. Command must be a single line (no newlines/heredocs).",
+		Description: "Run one shell command and block until it finishes or timeout_ms elapses. " +
+			"Returns the clean output and exit code. Runs in the same persistent shell as " +
+			"ssh_send_command, so cwd and environment carry over. On timeout the command is NOT " +
+			"killed: the result shows completed=false and the screen; poll with ssh_get_screen, " +
+			"interrupt with ssh_send_keys (Ctrl-C), or wait. Do not use it for full-screen " +
+			"programs (vim, less, htop, REPLs); use ssh_send_command and ssh_send_keys instead.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args execArgs) (*mcp.CallToolResult, any, error) {
 		timeout := time.Duration(args.TimeoutMs) * time.Millisecond
 		res, err := mgr.Exec(args.SessionID, args.Command, timeout)
@@ -181,26 +165,11 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolSendCommand,
-		Description: "Send a command to an SSH session and return the rendered screen. " +
-			"Prefer ssh_exec for commands that should finish -- it blocks, returns clean output, " +
-			"and gives you an exit code. Use ssh_send_command only for INTERACTIVE programs (vim, " +
-			"less, htop, mysql REPL, tmux) or fire-and-forget launches you do not want to wait for. " +
-			"IMPORTANT: this call is NON-BLOCKING with respect to the remote command. " +
-			"It writes the command + newline to the shell's stdin, waits a short settle " +
-			"period (~3.5s) for the terminal to redraw, then returns the screen as-is " +
-			"-- whether or not the command has finished. " +
-			"Implications you must respect: " +
-			"(1) Long-running commands (sleep, make, training jobs, package installs) " +
-			"continue running on the remote host after this call returns. " +
-			"(2) To 'wait' for a command, sleep on YOUR side (your own bash/timer tool, " +
-			"NOT by prefixing 'sleep N;' to the SSH command) and then call ssh_get_screen. " +
-			"(3) Sending another command before the previous one finishes queues input in " +
-			"the remote shell's stdin and will produce interleaved/garbled output -- " +
-			"wait for completion (poll ssh_get_screen for the prompt) first. " +
-			"(4) For commands whose output you don't want streaming through the screen, " +
-			"redirect to a file (`cmd > /tmp/out 2>&1 &`) and read it back with ssh_read_file. " +
-			"This non-blocking behavior is intentional: it lets TUIs (vim, htop, tmux, " +
-			"less) stay interactive across calls.",
+		Description: "Send a command line to an SSH session without waiting for it to finish, then " +
+			"return the screen after a short settle (~3.5s). Use it for interactive programs (vim, " +
+			"htop, tmux, REPLs) and fire-and-forget launches. Prefer ssh_exec for commands that should " +
+			"finish. To wait for a result, poll with ssh_get_screen until the prompt returns. " +
+			"Do not send another command while one is still running.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args commandArgs) (*mcp.CallToolResult, any, error) {
 		screen, err := mgr.SendCommand(args.SessionID, args.Command)
 		if err != nil {
@@ -226,14 +195,9 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolGetScreen,
-		Description: "Get the current rendered screen content of an SSH session. " +
-			"Use this to poll for output produced by a previously sent command, since " +
-			"ssh_send_command returns immediately after a short settle delay and does " +
-			"not wait for long-running commands to finish. Typical pattern: call " +
-			"ssh_send_command, sleep on YOUR side for the expected duration, then call " +
-			"ssh_get_screen (repeat if needed until you see the shell prompt or the " +
-			"expected output). This call also waits a short settle delay (~2.5s) before " +
-			"rendering, so consecutive polls are naturally spaced.",
+		Description: "Get the rendered screen of an SSH session. Use it to poll output after " +
+			"ssh_send_command: wait on your side, then call it again until the prompt or expected " +
+			"output appears. Waits ~2.5s before rendering, so polls are naturally spaced.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args sessionArgs) (*mcp.CallToolResult, any, error) {
 		screen, err := mgr.GetScreen(args.SessionID)
 		if err != nil {
@@ -338,17 +302,11 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: toolEditFile,
-		Description: "Edit a remote file by exact find-and-replace over SFTP, with the same semantics " +
-			"as a local editor: replace `old_string` with `new_string`. " +
-			"Leave `old_string` empty to CREATE a new file (it must not already exist); leave " +
-			"`new_string` empty to DELETE `old_string`. " +
-			"`old_string` must match EXACTLY including whitespace, indentation, and line breaks, and " +
-			"must be UNIQUE in the file unless `replace_all` is true -- otherwise the edit is rejected " +
-			"so you can add more surrounding context. " +
-			"You MUST read the file with ssh_read_file first (a full read); editing is refused " +
-			"otherwise, and also if the file changed on the remote since you last read it. " +
-			"Line endings are preserved. For whole-file rewrites use ssh_write_file; for renames/moves " +
-			"use ssh_exec with mv.",
+		Description: "Edit a remote file over SFTP by exact find-and-replace of old_string with " +
+			"new_string. Empty old_string creates a file (it must not exist); empty new_string deletes " +
+			"old_string. old_string must match exactly and be unique unless replace_all is true. " +
+			"You must read the file with ssh_read_file first; the edit is refused if the file changed " +
+			"on the remote since. For whole-file rewrites use ssh_write_file.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args editFileArgs) (*mcp.CallToolResult, any, error) {
 		result, err := mgr.EditFile(args.SessionID, args.RemotePath, args.OldString, args.NewString, args.ReplaceAll)
 		if err != nil {
