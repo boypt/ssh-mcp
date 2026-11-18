@@ -7,9 +7,15 @@
 
 MCP server providing persistent SSH sessions for AI coding agents via the [Model Context Protocol](https://modelcontextprotocol.io).
 
-> **About this fork:** this version is maintained for personal use on Windows 11. Its goal is to replace the command-line `ssh` client for agents, not to act as a security boundary. The OpenSSH client on Windows has no session reuse, so every connection re-authenticates. This fork reuses a live session per host alias within the agent's run, and otherwise follows `~/.ssh/config` (including `StrictHostKeyChecking` and `UserKnownHostsFile`) so commands behave like `ssh`.
+> **About this fork:** maintained for personal use on Windows 11. Its goal is to replace the command-line `ssh` client for agents, not to act as a security boundary. The Windows OpenSSH client has no session reuse, so every connection re-authenticates. This fork keeps sessions alive within the agent's run and otherwise behaves like `ssh`.
 >
-> The host allowlist is an optional guardrail for the model. It does not stop an agent that has its own shell from running `ssh` directly.
+> - **Session reuse**: connecting to the same `user@host:port` returns the live session, whether it was reached by alias or IP
+> - **Quick connect**: `ssh_connect` accepts a hostname or IP directly, with optional `user` and `port` arguments
+> - **`host:port` targets**: `admin@10.0.1.50:1022` and bracketed IPv6 such as `admin@[2001:db8::1]:22`
+> - **Windows named pipe agent**: `SSH_AUTH_SOCK` can point to a Windows named pipe
+> - **Host key checking from `~/.ssh/config`**: `StrictHostKeyChecking` (`yes`/`ask`, `accept-new`, `no`/`off`) and `UserKnownHostsFile`
+> - **Optional allowlist**: `--allowed-hosts` or `config.json` restricts connections. Without one, any host is allowed. It is a guardrail for the model, not a security boundary
+> - **Open-source release pipeline**: GoReleaser on tag push, without the paid GoReleaser Pro
 
 ## The Problem
 
@@ -32,7 +38,7 @@ ssh-mcp --allowed-hosts="web1,db1,staging"
 - **File transfer** — Bidirectional file and directory transfers via SFTP (recursive)
 - **Optional allowlist** — `--allowed-hosts` / `config.json` restricts connections to listed aliases. Without one, any alias from `~/.ssh/config` can be connected. This is a guardrail for the model, not a security boundary: an agent with its own shell can still run `ssh` directly
 - **Host key checking** — Follows `StrictHostKeyChecking` and `UserKnownHostsFile` from `~/.ssh/config`, same as `ssh`
-- **Session reuse** — `ssh_connect` to an alias with a live session returns that session instead of re-authenticating
+- **Session reuse** — `ssh_connect` to a `user@host:port` with a live session returns that session instead of re-authenticating
 - **Session management** — Multiple concurrent sessions with independent state
 - **Zero config** — Works out of the box if your `~/.ssh/config` is set up
 
