@@ -1,6 +1,6 @@
 # ssh-mcp
 
-[![Test](https://github.com/taigrr/ssh-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/taigrr/ssh-mcp/actions/workflows/test.yml)
+[![Test](https://github.com/boypt/ssh-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/boypt/ssh-mcp/actions/workflows/test.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/taigrr/ssh-mcp.svg)](https://pkg.go.dev/github.com/taigrr/ssh-mcp)
 [![Go Report Card](https://goreportcard.com/badge/github.com/taigrr/ssh-mcp)](https://goreportcard.com/report/github.com/taigrr/ssh-mcp)
 [![License: 0BSD](https://img.shields.io/badge/License-0BSD-blue.svg)](LICENSE)
