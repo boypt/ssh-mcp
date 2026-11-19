@@ -14,7 +14,8 @@ MCP server providing persistent SSH sessions for AI coding agents via the [Model
 > - **`host:port` targets**: `admin@10.0.1.50:1022` and bracketed IPv6 such as `admin@[2001:db8::1]:22`
 > - **Windows named pipe agent**: `SSH_AUTH_SOCK` can point to a Windows named pipe
 > - **Host key checking from `~/.ssh/config`**: unknown hosts connect with a warning by default; changed keys are rejected with the command to fix it. Also supports `StrictHostKeyChecking` `yes`, `accept-new`, `no`/`off` and `UserKnownHostsFile`
-> - **Optional allowlist**: `--allowed-hosts` or `config.json` restricts connections. Without one, any host is allowed. It is a guardrail for the model, not a security boundary
+> - **Exact host blocks win over wildcards**: `HostName`, `Port`, `User`, `IdentityFile`, `UserKnownHostsFile` and `StrictHostKeyChecking` in a `Host` block that names the alias exactly override `Host *` and similar wildcard blocks, whatever their order in `~/.ssh/config`
+- **Optional allowlist**: `--allowed-hosts` or `config.json` restricts connections. Without one, any host is allowed. It is a guardrail for the model, not a security boundary
 > - **Open-source release pipeline**: GoReleaser on tag push, without the paid GoReleaser Pro
 
 ## The Problem
@@ -298,6 +299,15 @@ Host keys are checked using options from `~/.ssh/config` for each alias:
 Unknown hosts are not written to known_hosts by default, so the warning repeats on each new connection until you add the key yourself, for example by connecting once with `ssh`.
 
 A changed key is always rejected, since it may be a man-in-the-middle attack. The error names the old entry (file and line) and the command to remove it, such as `ssh-keygen -R '10.0.1.50' -f ~/.ssh/known_hosts`. Run it only after confirming the machine was really replaced. Reused sessions do not repeat the warning.
+
+Settings are resolved in this order for each key (`HostName`, `Port`, `User`, `IdentityFile`, `UserKnownHostsFile`, `StrictHostKeyChecking`):
+
+1. A `Host` block whose patterns name the alias exactly (no `*` or `?`) and set the key
+2. Otherwise, the standard `ssh` lookup: wildcard blocks such as `Host *` and system config, first match wins
+
+So a global `Host *` with `StrictHostKeyChecking accept-new` applies to every host, unless that host has its own exact block setting it.
+
+Note: `Include` files are read only by the standard lookup, so an exact block inside an included file does not get priority.
 
 `UserKnownHostsFile` defaults to `~/.ssh/known_hosts` and accepts multiple space-separated paths. For test machines that share IPs, set the options per host:
 
