@@ -7,16 +7,14 @@
 
 MCP server providing persistent SSH sessions for AI coding agents via the [Model Context Protocol](https://modelcontextprotocol.io).
 
-> **About this fork:** maintained for personal use on Windows 11. Its goal is to replace the command-line `ssh` client for agents, not to act as a security boundary. The Windows OpenSSH client has no session reuse, so every connection re-authenticates. This fork keeps sessions alive within the agent's run and otherwise behaves like `ssh`.
+> **About this fork:** more general-purpose — Windows-compatible, closer `ssh`-config parity, a drop-in `ssh` replacement for agents, not a security boundary.
 >
-> - **Windows named pipe agent**: `SSH_AUTH_SOCK` can point to a Windows named pipe
-> - **Session reuse**: connecting to the same `user@host:port` returns the live session, whether it was reached by alias or IP
-> - **Quick connect**: `ssh_connect` accepts a hostname or IP directly, with optional `user` and `port` arguments
-> - **`host:port` targets**: `admin@10.0.1.50:1022` and bracketed IPv6 such as `admin@[2001:db8::1]:22`
-> - **Host key checking from `~/.ssh/config`**: unknown hosts connect with a warning by default; changed keys are rejected with the command to fix it. Also supports `StrictHostKeyChecking` `yes`, `accept-new`, `no`/`off` and `UserKnownHostsFile`
-> - **Exact host blocks win over wildcards**: `HostName`, `Port`, `User`, `IdentityFile`, `UserKnownHostsFile` and `StrictHostKeyChecking` in a `Host` block that names the alias exactly override `Host *` and similar wildcard blocks, whatever their order in `~/.ssh/config`
-> - **Optional allowlist**: `--allowed-hosts` or `config.json` restricts connections. Without one, any host is allowed. It is a guardrail for the model, not a security boundary
-> - **Open-source release pipeline**: GoReleaser on tag push, without the paid GoReleaser Pro
+> - **Named-pipe agent**: `SSH_AUTH_SOCK` accepts Windows named pipes
+> - **Session reuse**: same `user@host:port` returns the live session
+> - **Quick connect**: `ssh_connect` takes a hostname/IP directly, via `user`/`port` args or inline `admin@10.0.1.50:1022`, `admin@[2001:db8::1]:22`
+> - **Host key checking**: honors `StrictHostKeyChecking` / `UserKnownHostsFile`; unknown hosts warn, changed keys reject with fix hint
+> - **Wildcard support**: honors `Host *` wildcards, exact `Host` blocks override them
+> - **Optional allowlist**: `--allowed-hosts` / `config.json`; unset means any host (model guardrail only)
 
 ## The Problem
 
