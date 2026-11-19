@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	sshconfig "github.com/kevinburke/ssh_config"
 	"github.com/taigrr/jety"
 )
 
@@ -27,12 +26,12 @@ type HostConfig struct {
 // tilde-prefixed paths work without manual handling.
 func resolveHostConfig(alias string) HostConfig {
 	hc := HostConfig{
-		Hostname:              sshconfig.Get(alias, "HostName"),
-		Port:                  sshconfig.Get(alias, "Port"),
-		User:                  sshconfig.Get(alias, "User"),
-		KeyPath:               sshconfig.Get(alias, "IdentityFile"),
-		StrictHostKeyChecking: strings.ToLower(sshconfig.Get(alias, "StrictHostKeyChecking")),
-		KnownHostsFiles:       expandKnownHostsFiles(sshconfig.Get(alias, "UserKnownHostsFile")),
+		Hostname:              sshConfigValue(alias, "HostName"),
+		Port:                  sshConfigValue(alias, "Port"),
+		User:                  sshConfigValue(alias, "User"),
+		KeyPath:               sshConfigValue(alias, "IdentityFile"),
+		StrictHostKeyChecking: strings.ToLower(sshConfigValue(alias, "StrictHostKeyChecking")),
+		KnownHostsFiles:       expandKnownHostsFiles(sshConfigValue(alias, "UserKnownHostsFile")),
 	}
 
 	if hc.Hostname == "" {
