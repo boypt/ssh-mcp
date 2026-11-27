@@ -30,11 +30,12 @@ const (
 )
 
 type connectArgs struct {
-	Host   string `json:"host" jsonschema:"Alias, hostname, or IP. May be [user@]host[:port]; bracket IPv6 when giving a port."`
-	User   string `json:"user,omitempty" jsonschema:"Login user. Overrides host's user and ~/.ssh/config."`
-	Port   int    `json:"port,omitempty" jsonschema:"SSH port. Overrides host's port and ~/.ssh/config. Default 22."`
-	Width  int    `json:"width,omitempty" jsonschema:"Initial terminal columns. Default 200."`
-	Height int    `json:"height,omitempty" jsonschema:"Initial terminal rows. Default 50."`
+	Host     string `json:"host" jsonschema:"Alias, hostname, or IP. May be [user@]host[:port]; bracket IPv6 when giving a port."`
+	User     string `json:"user,omitempty" jsonschema:"Login user. Overrides host's user and ~/.ssh/config."`
+	Username string `json:"username,omitempty" jsonschema:"Alias for user. Login user. Overrides host's user and ~/.ssh/config."`
+	Port     int    `json:"port,omitempty" jsonschema:"SSH port. Overrides host's port and ~/.ssh/config. Default 22."`
+	Width    int    `json:"width,omitempty" jsonschema:"Initial terminal columns. Default 200."`
+	Height   int    `json:"height,omitempty" jsonschema:"Initial terminal rows. Default 50."`
 }
 
 type sessionArgs struct {
@@ -122,7 +123,11 @@ func registerTools(server *mcp.Server, mgr *SSHManager) {
 			"If the host key is unknown, the result includes a WARNING to relay to the user; " +
 			"a changed key is rejected.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args connectArgs) (*mcp.CallToolResult, any, error) {
-		opts := ConnectOptions{Host: args.Host, User: args.User, Width: args.Width, Height: args.Height}
+		user := args.User
+		if user == "" {
+			user = args.Username
+		}
+		opts := ConnectOptions{Host: args.Host, User: user, Username: args.Username, Width: args.Width, Height: args.Height}
 		if args.Port != 0 {
 			opts.Port = strconv.Itoa(args.Port)
 		}

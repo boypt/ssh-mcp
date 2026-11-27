@@ -21,6 +21,9 @@ var (
 	// for the requested host (no agent, no keys, no password).
 	ErrNoAuthMethods = errors.New("no authentication methods available")
 
+	// ErrMissingUser indicates the connection target resolved to no login user.
+	ErrMissingUser = errors.New("missing user / please provide user")
+
 	// ErrExecInFlight indicates an ssh_exec call was attempted while another
 	// is already running in the same session's shell.
 	ErrExecInFlight = errors.New("another command is already executing in this session")

@@ -202,11 +202,12 @@ func clampTermSize(w, h int) (int, int) {
 // alias from ~/.ssh/config or a hostname/IP, and may carry a "user@" prefix.
 // User and Port, when set, override ~/.ssh/config and the defaults.
 type ConnectOptions struct {
-	Host   string
-	User   string
-	Port   string
-	Width  int
-	Height int
+	Host     string
+	User     string
+	Username string
+	Port     string
+	Width    int
+	Height   int
 }
 
 // ConnectWithSize is like Connect but lets the caller pick the initial PTY
@@ -228,6 +229,9 @@ func (m *SSHManager) ConnectWithOptions(opts ConnectOptions) (string, error) {
 // connect is ConnectWithOptions that also returns warnings about the host, such
 // as an unverified host key. Warnings are empty when an existing session is reused.
 func (m *SSHManager) connect(opts ConnectOptions) (string, []string, error) {
+	if opts.User == "" {
+		opts.User = opts.Username
+	}
 	user, host, port, err := parseTarget(opts.Host)
 	if err != nil {
 		return "", nil, err
@@ -266,6 +270,10 @@ func (m *SSHManager) connect(opts ConnectOptions) (string, []string, error) {
 
 	if id, ok := m.activeSessionFor(endpoint); ok {
 		return id, nil, nil
+	}
+
+	if strings.TrimSpace(hc.User) == "" {
+		return "", nil, ErrMissingUser
 	}
 
 	width, height := clampTermSize(opts.Width, opts.Height)
